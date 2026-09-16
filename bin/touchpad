@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Enable, disable, or toggle the Zenbook Duo keyboard palm-rest trackpad.
+# The same HID also exposes a relative mouse node; both must move together
+# or the cursor still moves. Do not use `omarchy toggle touchpad` on this
+# machine — that command matches the lid digitizer first.
+set -euo pipefail
+IFS=$'\n\t'
+
+ACTION="${1:-toggle}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/toggles/hypr"
+STATE_FILE="$STATE_DIR/duo-touchpad-disabled.lua"
+
+DEVICES=(
+  "asus-zenbook-duo-keyboard-touchpad"
+  "asus-zenbook-duo-keyboard-mouse"
+)
+
+usage() {
+  echo "Usage: toggle [on|off|toggle|status]" >&2
+}
+
+apply() {
+  local enabled=$1
+  local name
+  for name in "${DEVICES[@]}"; do
+    hyprctl eval "hl.device({ name = \"$name\", enabled = $enabled })" >/dev/null || true
+  done
+}
+
+write_disable() {
+  mkdir -p "$STATE_DIR"
+  {
+    echo "-- Duo keyboard palm-rest pad + relative mouse node."
+    local name
+    for name in "${DEVICES[@]}"; do
+      printf 'hl.device({ name = "%s", enabled = false })\n' "$name"
+    done
+  } >"$STATE_FILE"
+}
+
+osd() {
+  omarchy osd -i touchpad -m "$1" >/dev/null 2>&1 || true
+}
+
+enable() {
+  apply true
+  rm -f "$STATE_FILE"
+  osd "Trackpad enabled"
+}
+
+disable() {
+  apply false
+  write_disable
+  osd "Trackpad disabled"
+}
+
+status() {
+  if [[ -f $STATE_FILE ]]; then
+    echo "off"
+  else
+    echo "on"
+  fi
+}
+
+case "$ACTION" in
+  on) enable ;;
+  off) disable ;;
+  toggle)
+    if [[ -f $STATE_FILE ]]; then
+      enable
+    else
+      disable
+    fi
+    ;;
+  status) status ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

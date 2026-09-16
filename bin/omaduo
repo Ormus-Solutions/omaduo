@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Omaduo — ASUS Zenbook Duo UX8406CA helpers for Omarchy.
+set -euo pipefail
+IFS=$'\n\t'
+
+BIN_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PLUGIN_DIR=$(cd "$BIN_DIR/.." && pwd)
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"
+MARKER="$STATE_DIR/omaduo-activated"
+HYPR="$HOME/.config/hypr"
+
+usage() {
+  echo "Usage: omaduo status|inspect|dry-run|activate|deactivate|layout|rotate|touchpad|kbd-backlight [args]" >&2
+}
+
+cmd_status() {
+  python3 "$BIN_DIR/status.py"
+}
+
+cmd_inspect() {
+  python3 "$BIN_DIR/status.py" | python3 -m json.tool
+  echo
+  echo "plugin: $PLUGIN_DIR"
+  echo "activated: $([[ -f $MARKER ]] && echo yes || echo no)"
+  echo "hypr binds: $(python3 "$BIN_DIR/hypr_block.py" has "$HYPR/bindings.lua")"
+}
+
+bindings_body() {
+  local root="$PLUGIN_DIR/bin"
+  cat <<EOF
+o.bind("F4", "Keyboard backlight toggle", "$root/kbd-backlight toggle", { locked = true })
+hl.unbind("XF86KbdLightOnOff")
+o.bind("XF86KbdLightOnOff", "Keyboard backlight toggle", "$root/kbd-backlight toggle", { locked = true })
+o.bind("F5", "Brightness down", "omarchy-brightness-display 5%-", { locked = true, repeating = true })
+o.bind("F6", "Brightness up", "omarchy-brightness-display +5%", { locked = true, repeating = true })
+o.bind("SUPER + R", "Toggle Duo portrait screens", "$root/rotate toggle")
+o.bind("SUPER + SHIFT + R", "Toggle Duo portrait screens", "$root/rotate toggle")
+o.bind("SUPER + SHIFT + ALT + R", "Flip Duo portrait direction", "$root/rotate flip")
+hl.unbind("XF86TouchpadToggle")
+hl.unbind("XF86TouchpadOn")
+hl.unbind("XF86TouchpadOff")
+o.bind("XF86TouchpadToggle", "Toggle Duo trackpad", "$root/touchpad toggle", { locked = true })
+o.bind("XF86TouchpadOn", "Enable Duo trackpad", "$root/touchpad on", { locked = true })
+o.bind("XF86TouchpadOff", "Disable Duo trackpad", "$root/touchpad off", { locked = true })
+o.bind("SUPER + ALT + T", "Toggle Duo trackpad", "$root/touchpad toggle")
+EOF
+}
+
+autostart_body() {
+  cat <<EOF
+o.launch_on_start("$PLUGIN_DIR/bin/layout apply")
+EOF
+}
+
+cmd_dry_run() {
+  echo "-- $HYPR/bindings.lua"
+  bindings_body
+  echo
+  echo "-- $HYPR/autostart.lua"
+  autostart_body
+}
+
+backup_once() {
+  local file=$1
+  local bak="${file}.bak.omaduo"
+  if [[ -f $file && ! -f $bak ]]; then
+    cp "$file" "$bak"
+  fi
+}
+
+cmd_activate() {
+  mkdir -p "$STATE_DIR"
+  backup_once "$HYPR/bindings.lua"
+  backup_once "$HYPR/autostart.lua"
+  local tmp
+  tmp=$(mktemp)
+  bindings_body >"$tmp"
+  python3 "$BIN_DIR/hypr_block.py" apply "$HYPR/bindings.lua" --body-file "$tmp"
+  autostart_body >"$tmp"
+  python3 "$BIN_DIR/hypr_block.py" apply "$HYPR/autostart.lua" --body-file "$tmp"
+  rm -f "$tmp"
+  : >"$MARKER"
+  echo "activated. Hyprland will reload on save. Marker: $MARKER"
+}
+
+cmd_deactivate() {
+  python3 "$BIN_DIR/hypr_block.py" remove "$HYPR/bindings.lua"
+  python3 "$BIN_DIR/hypr_block.py" remove "$HYPR/autostart.lua"
+  rm -f "$MARKER"
+  echo "deactivated. Marked Hyprland blocks removed."
+}
+
+cmd="${1:-status}"
+shift || true
+case "$cmd" in
+  status) cmd_status ;;
+  inspect) cmd_inspect ;;
+  dry-run) cmd_dry_run ;;
+  activate) cmd_activate ;;
+  deactivate) cmd_deactivate ;;
+  layout) exec "$BIN_DIR/layout" "$@" ;;
+  rotate) exec "$BIN_DIR/rotate" "$@" ;;
+  touchpad) exec "$BIN_DIR/touchpad" "$@" ;;
+  kbd-backlight) exec "$BIN_DIR/kbd-backlight" "$@" ;;
+  -h|--help) usage ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

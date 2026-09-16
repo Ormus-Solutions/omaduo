@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Toggle Zenbook Duo screens between stacked landscape and side-by-side portrait.
+set -euo pipefail
+IFS=$'\n\t'
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/toggles"
+FLAG="$STATE_DIR/duo-rotate"
+DIR_FILE="$STATE_DIR/duo-rotate.dir"
+LAYOUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/layout"
+ACCEL=/sys/bus/iio/devices/iio:device1
+
+mkdir -p "$STATE_DIR"
+
+stored_transform() {
+  local t
+  t=$(<"$DIR_FILE" 2>/dev/null || true)
+  if [[ "$t" == "1" || "$t" == "3" ]]; then
+    echo "$t"
+    return
+  fi
+  echo ""
+}
+
+# iio-sensor-proxy: +X dominant = left-up. Hyprland 1 = 90° CW, 3 = 270° CW.
+detect_transform() {
+  local x y z ax ay az
+  if [[ ! -r "$ACCEL/in_accel_x_raw" ]]; then
+    stored_transform
+    return
+  fi
+  x=$(<"$ACCEL/in_accel_x_raw")
+  y=$(<"$ACCEL/in_accel_y_raw")
+  z=$(<"$ACCEL/in_accel_z_raw")
+  ax=${x#-}; ay=${y#-}; az=${z#-}
+  if (( ax >= ay && ax >= az )); then
+    if (( x > 0 )); then
+      echo 1
+    else
+      echo 3
+    fi
+    return
+  fi
+  local stored
+  stored=$(stored_transform)
+  if [[ -n "$stored" ]]; then
+    echo "$stored"
+    return
+  fi
+  echo 1
+}
+
+label_for() {
+  case "$1" in
+    1) echo "Portrait (left-up)" ;;
+    3) echo "Portrait (right-up)" ;;
+    *) echo "Landscape" ;;
+  esac
+}
+
+osd() {
+  omarchy osd -i screen-rotation -m "$1" >/dev/null 2>&1 || true
+}
+
+write_on() {
+  local t=$1
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$t" >"$DIR_FILE"
+  : >"$FLAG"
+}
+
+write_off() {
+  rm -f "$FLAG"
+}
+
+apply_layout() {
+  "$LAYOUT" apply
+}
+
+portrait_on() {
+  [[ -f "$FLAG" ]]
+}
+
+cmd_on() {
+  local t
+  t=$(detect_transform)
+  write_on "$t"
+  apply_layout
+  osd "$(label_for "$t")"
+}
+
+cmd_off() {
+  write_off
+  apply_layout
+  osd "Landscape"
+}
+
+cmd_toggle() {
+  if portrait_on; then
+    cmd_off
+  else
+    cmd_on
+  fi
+}
+
+cmd_flip() {
+  local t
+  t=$(stored_transform)
+  if [[ "$t" == "1" ]]; then
+    t=3
+  else
+    t=1
+  fi
+  write_on "$t"
+  apply_layout
+  osd "$(label_for "$t")"
+}
+
+cmd_status() {
+  if portrait_on; then
+    local t
+    t=$(stored_transform)
+    echo "on ${t:-1}"
+  else
+    echo off
+  fi
+}
+
+case "${1:-toggle}" in
+  on) cmd_on ;;
+  off) cmd_off ;;
+  toggle) cmd_toggle ;;
+  flip) cmd_flip ;;
+  status) cmd_status ;;
+  *) echo "usage: $0 on|off|toggle|flip|status" >&2; exit 1 ;;
+esac

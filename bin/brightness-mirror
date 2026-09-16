@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Mirror lid brightness onto the ScreenPad on UX8406CA.
+#
+# Omarchy brightness keys write intel_backlight (eDP-1) via brightnessctl/logind.
+# The ScreenPad has two nodes: the DRM backlight (card1-eDP-2-backlight) and the
+# ASUS WMI LED (asus_screenpad). Writes to only one of them leave the other
+# panel stuck. Keyboard-on-magnet keeps the WMI LED at 0.
+set -euo pipefail
+IFS=$'\n\t'
+
+SRC_DIR=/sys/class/backlight/intel_backlight
+DST_NAMES=(
+  card1-eDP-2-backlight
+  asus_screenpad
+)
+
+keyboard_on() {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+    [[ $(<"$d/idVendor") == 0b05 ]] || continue
+    [[ $(<"$d/idProduct") == 1bf2 ]] || continue
+    return 0
+  done
+  return 1
+}
+
+set_device() {
+  local name=$1
+  local value=$2
+  [[ -e "/sys/class/backlight/${name}/brightness" ]] || return 0
+  brightnessctl -d "$name" set "$value" >/dev/null || true
+}
+
+sync_once() {
+  local cur src_max name dst_max val
+  [[ -e "$SRC_DIR/brightness" ]] || return 0
+  if keyboard_on; then
+    echo 0 | sudo -n tee /sys/class/backlight/asus_screenpad/brightness >/dev/null 2>&1 || true
+    return 0
+  fi
+  cur=$(<"$SRC_DIR/brightness")
+  src_max=$(<"$SRC_DIR/max_brightness")
+  (( src_max > 0 )) || return 0
+  for name in "${DST_NAMES[@]}"; do
+    dst_max=$(<"/sys/class/backlight/${name}/max_brightness")
+    (( dst_max > 0 )) || continue
+    val=$((cur * dst_max / src_max))
+    (( val < 1 )) && val=1
+    set_device "$name" "$val"
+  done
+}
+
+watch() {
+  sync_once || true
+  while inotifywait -qq -e modify "$SRC_DIR/brightness"; do
+    sync_once || true
+  done
+}
+
+case "${1:-watch}" in
+  watch) watch ;;
+  once | apply) sync_once ;;
+  *) echo "usage: $0 watch|once" >&2; exit 1 ;;
+esac

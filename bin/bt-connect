@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Reconnect the bonded Duo keyboard over BLE. Safe to run while docked
+# (connect will fail, USB HID is used). On detach, retry until HID is up.
+set -uo pipefail
+MAC_FILE="${HOME}/.config/moon-duo/bt-keyboard.mac"
+[[ -s "$MAC_FILE" ]] || exit 0
+mac=$(tr -d '[:space:]' <"$MAC_FILE")
+[[ "$mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || exit 0
+
+rfkill unblock bluetooth >/dev/null 2>&1 || true
+bluetoothctl power on >/dev/null 2>&1 || true
+bluetoothctl trust "$mac" >/dev/null 2>&1 || true
+
+# USB still present -> BLE radio is usually off. Don't fight it.
+for d in /sys/bus/usb/devices/*; do
+  [[ -f "$d/idVendor" && -f "$d/idProduct" ]] || continue
+  if [[ $(<"$d/idVendor") == 0b05 && $(<"$d/idProduct") == 1bf2 ]]; then
+    exit 0
+  fi
+done
+
+sleep 1
+for delay in 0 1 1 2 2 3 4 5; do
+  sleep "$delay"
+  if timeout 5 bluetoothctl connect "$mac" >/dev/null 2>&1; then
+    if bluetoothctl info "$mac" 2>/dev/null | grep -q 'Connected: yes'; then
+      exit 0
+    fi
+  fi
+done
+exit 1

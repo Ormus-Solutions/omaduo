@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Toggle the Zenbook Duo keyboard backlight (F4).
+
+The BLE/USB keyboard has no asus::kbd_backlight LED. Brightness is a HID
+feature report 0x5A on the vendor interface (hidraw), same packet hid-asus
+and zenbook-duo-linux send: 5A BA C5 C4 <0-3>.
+"""
+from __future__ import annotations
+
+import fcntl
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPORT_ID = 0x5A
+LEVELS = 4  # 0 off, 1 low, 2 medium, 3 high
+DEFAULT_ON = 2
+STATE_PATH = Path.home() / ".local/state/moon-duo/kbd-backlight"
+ON_PATH = Path.home() / ".local/state/moon-duo/kbd-backlight-on"
+HIDRAW_ROOT = Path("/sys/class/hidraw")
+
+
+def _ioc(direction: int, type_: str, nr: int, size: int) -> int:
+    return direction << 30 | size << 16 | ord(type_) << 8 | nr
+
+
+def hid_set_feature(size: int) -> int:
+    return _ioc(3, "H", 0x06, size)
+
+
+def find_kbd_hidraw() -> Path:
+    for entry in sorted(HIDRAW_ROOT.iterdir()):
+        uevent = entry / "device" / "uevent"
+        rdesc = entry / "device" / "report_descriptor"
+        if not uevent.is_file() or not rdesc.is_file():
+            continue
+        text = uevent.read_text(errors="replace")
+        if "0B05" not in text.upper():
+            continue
+        if b"\x85\x5a" not in rdesc.read_bytes():
+            continue
+        return Path("/dev") / entry.name
+    raise FileNotFoundError("Duo keyboard hidraw (report 0x5A) not found")
+
+
+def set_level(dev: Path, level: int) -> None:
+    if level < 0 or level >= LEVELS:
+        raise ValueError(f"level must be 0-{LEVELS - 1}")
+    init = bytes(
+        [
+            REPORT_ID,
+            0x41,
+            0x53,
+            0x55,
+            0x53,
+            0x20,
+            0x54,
+            0x65,
+            0x63,
+            0x68,
+            0x2E,
+            0x49,
+            0x6E,
+            0x63,
+            0x2E,
+            0x00,
+        ]
+    )
+    pkt = bytes([REPORT_ID, 0xBA, 0xC5, 0xC4, level] + [0] * 11)
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, hid_set_feature(len(init)), bytearray(init))
+        fcntl.ioctl(fd, hid_set_feature(len(pkt)), bytearray(pkt))
+    finally:
+        os.close(fd)
+
+
+def read_state() -> int:
+    try:
+        return int(STATE_PATH.read_text().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def read_last_on() -> int:
+    try:
+        value = int(ON_PATH.read_text().strip())
+    except (OSError, ValueError):
+        return DEFAULT_ON
+    if 1 <= value < LEVELS:
+        return value
+    return DEFAULT_ON
+
+
+def write_state(level: int) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(f"{level}\n")
+    if level > 0:
+        ON_PATH.write_text(f"{level}\n")
+
+
+def osd(level: int) -> None:
+    percent = 0 if level == 0 else round(level * 100 / (LEVELS - 1))
+    subprocess.Popen(
+        ["omarchy-osd", "-i", "keyboard", "-p", str(percent)],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def main() -> int:
+    action = sys.argv[1] if len(sys.argv) > 1 else "toggle"
+    try:
+        dev = find_kbd_hidraw()
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not os.access(dev, os.R_OK | os.W_OK):
+        print(f"{dev} is not writable (need udev GROUP=input MODE=0660)", file=sys.stderr)
+        return 1
+
+    if action in {"status", "get"}:
+        print(read_state())
+        return 0
+    if action == "toggle":
+        current = read_state()
+        level = 0 if current > 0 else read_last_on()
+    elif action == "cycle":
+        level = (read_state() + 1) % LEVELS
+    else:
+        try:
+            level = int(action)
+        except ValueError:
+            print("usage: duo-kbd-backlight [toggle|cycle|status|0-3]", file=sys.stderr)
+            return 1
+        if level < 0 or level >= LEVELS:
+            print("level must be 0-3", file=sys.stderr)
+            return 1
+
+    set_level(dev, level)
+    write_state(level)
+    osd(level)
+    print(level)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

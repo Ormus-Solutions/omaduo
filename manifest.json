@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "omaduo",
+  "name": "Omaduo",
+  "version": "1.0.0",
+  "author": "Ormus Solutions",
+  "license": "MIT",
+  "description": "Omaduo: ScreenPad layout, portrait rotate, and palm-rest trackpad for the ASUS Zenbook Duo on the Omarchy bar.",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omaduo",
+    "description": "Zenbook Duo ScreenPad, portrait, and palm-rest trackpad",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
