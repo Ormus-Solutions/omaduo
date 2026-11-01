@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 
 Item {
@@ -82,8 +83,27 @@ Item {
     onExited: root.refresh()
   }
 
+  // Each status read starts Python and hyprctl (about 0.3 s of CPU), so the
+  // service reads on events, not on a fast clock. Keyboard attach and detach
+  // reach Hyprland as monitor events, because the layout script turns eDP-2
+  // off and on. The timer is a fallback for changes without an event, such as
+  // a rotate started by another tool.
+  readonly property int fallbackIntervalMs: 10000
+
+  function isStatusEvent(name) {
+    var n = String(name || "")
+    return n.indexOf("monitoradded") === 0 || n.indexOf("monitorremoved") === 0 || n === "configreloaded"
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && root.isStatusEvent(event.name)) root.refresh()
+    }
+  }
+
   Timer {
-    interval: 2000
+    interval: root.fallbackIntervalMs
     running: true
     repeat: true
     onTriggered: root.refresh()
